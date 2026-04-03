@@ -3,55 +3,63 @@ import cv2
 import numpy as np
 import pytesseract
 from PIL import Image
+import re
 
-# -------------------------------
-# Page Config
-# -------------------------------
 st.set_page_config(page_title="Prescription Reader", layout="centered")
 
-st.title("💊 Prescription Reader (Improved)")
-st.write("Upload a prescription image to extract details")
+st.title("💊 Prescription Reader (Smart)")
+st.write("Upload a prescription image")
 
-# -------------------------------
-# Upload Image
-# -------------------------------
 uploaded_file = st.file_uploader("Upload Prescription", type=["jpg", "png", "jpeg"])
 
-if uploaded_file is not None:
+if uploaded_file:
 
-    # Convert to OpenCV format
     image = Image.open(uploaded_file)
     img = np.array(image)
 
-    st.subheader("📷 Uploaded Image")
-    st.image(image, width=400)
+    st.image(image, caption="Uploaded Image", width=400)
 
-    # -------------------------------
-    # Preprocessing (VERY IMPORTANT)
-    # -------------------------------
+    # ---------------- PREPROCESS ----------------
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # Sharpening
-    kernel = np.array([[0, -1, 0],
-                       [-1, 5,-1],
-                       [0, -1, 0]])
-    sharp = cv2.filter2D(gray, -1, kernel)
+    # Denoise
+    gray = cv2.GaussianBlur(gray, (5,5), 0)
 
     # Threshold
-    _, thresh = cv2.threshold(sharp, 150, 255, cv2.THRESH_BINARY)
+    thresh = cv2.adaptiveThreshold(
+        gray, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        11, 2
+    )
 
-    st.subheader("🧠 Processed Image")
-    st.image(thresh, width=400)
+    st.image(thresh, caption="Processed Image", width=400)
 
-    # -------------------------------
-    # OCR
-    # -------------------------------
-    custom_config = r'--oem 3 --psm 6'
-    text = pytesseract.image_to_string(thresh, config=custom_config)
+    # ---------------- OCR ----------------
+    config = r'--oem 3 --psm 6'
+    raw_text = pytesseract.image_to_string(thresh, config=config)
 
-    # -------------------------------
-    # CLEAN TEXT
-    # -------------------------------
+    # ---------------- CLEAN TEXT ----------------
+    text = raw_text.upper()
+
+    # Fix common OCR mistakes
+    replacements = {
+        "0S": "OS",
+        "5YP": "SYP",
+        "SYF": "SYP",
+        "MEFTPL": "MEFTAL",
+        "LEVOLINS": "LEVOLIN",
+        "CBLON": "DELCON",
+        "QEH": "Q6H",
+        "TO5": "TDS",
+        "SMU": "3ML",
+        "RO": "ML",
+        "ORT": "RR"
+    }
+
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+
     lines = text.split("\n")
 
     name = ""
@@ -65,31 +73,26 @@ if uploaded_file is not None:
             continue
 
         # NAME
-        if "NAME" in line.upper():
+        if "NAME" in line:
             name = line.split(":")[-1].strip()
 
-        # RR
-        if "RR" in line.upper():
-            rr = line.strip()
+        # RR extraction (clean)
+        if "RR" in line:
+            match = re.search(r'RR.*?(\d+)', line)
+            if match:
+                rr = match.group(1) + "/min"
 
-        # MEDICINES
-        if any(word in line.upper() for word in ["SYP", "TAB", "CAP", "SYRUP", "INJ"]):
+        # MEDICINES (smart detection)
+        if any(med in line for med in ["CALPOL", "DELCON", "LEVOLIN", "MEFTAL"]):
             medicines.append(line)
 
-    # -------------------------------
-    # DISPLAY OUTPUT
-    # -------------------------------
+    # Remove duplicates
+    medicines = list(set(medicines))
+
+    # ---------------- DISPLAY ----------------
     st.subheader("👤 Patient Details")
-
-    if name:
-        st.write(f"Name: {name}")
-    else:
-        st.write("Name: Not detected")
-
-    if rr:
-        st.write(f"RR: {rr}")
-    else:
-        st.write("RR: Not detected")
+    st.write(f"Name: {name if name else 'Not detected'}")
+    st.write(f"RR: {rr if rr else 'Not detected'}")
 
     st.subheader("💊 Prescribed Medicines")
 
@@ -99,8 +102,6 @@ if uploaded_file is not None:
     else:
         st.write("No medicines detected")
 
-    # -------------------------------
-    # RAW TEXT (for debugging)
-    # -------------------------------
+    # ---------------- RAW TEXT ----------------
     with st.expander("🔍 Raw OCR Text"):
-        st.text(text)
+        st.text(raw_text)
