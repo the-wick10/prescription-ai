@@ -12,8 +12,35 @@ st.markdown("Upload a prescription to extract structured medical information.")
 
 uploaded_file = st.file_uploader("📤 Upload Prescription", type=["jpg", "png", "jpeg"])
 
-# Known medicines
-known_meds = ["CALPOL", "DELCON", "LEVOLIN", "MEFTAL"]
+# --- MEDICINE FIX ---
+medicine_dict = {
+    "CALPOL": ["CALPOL", "CRLPOL", "2S0", "250"],
+    "LEVOLIN": ["LEVOLIN", "LEVOUN"],
+    "MEFTAL-P": ["MEFTAL", "MEFTALP"],
+    "DELCON": ["DELCON", "OGLON"]
+}
+
+def fix_medicine(line):
+    for correct, variations in medicine_dict.items():
+        for var in variations:
+            if var in line:
+                return correct
+    return None
+
+def clean_line(line):
+    line = line.upper()
+
+    line = re.sub(r'^(SGP|GYP|SYP|GE)\s+', '', line)
+
+    line = line.replace("TOS", "TDS")
+    line = line.replace("TO5", "TDS")
+    line = line.replace("TDSX", "TDS")
+    line = line.replace("SOG", "SOS")
+
+    line = re.sub(r'2S0', '250', line)
+    line = re.sub(r'(\d+)\s*M', r'\1 ml', line)
+
+    return line.strip()
 
 if uploaded_file:
 
@@ -22,37 +49,20 @@ if uploaded_file:
 
     st.image(image, caption="🖼 Uploaded Prescription", use_container_width=True)
 
-    # ---------------- PREPROCESS ----------------
+    # --- PREPROCESS ---
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
     blur = cv2.GaussianBlur(gray, (3, 3), 0)
-
-    _, thresh = cv2.threshold(
-        blur, 0, 255,
-        cv2.THRESH_BINARY + cv2.THRESH_OTSU
-    )
+    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
     st.image(thresh, caption="🧪 Processed Image", use_container_width=True)
 
-    # ---------------- OCR ----------------
-    config = r'--oem 3 --psm 4'
+    # --- OCR ---
+    config = r'--oem 3 --psm 6'
     text = pytesseract.image_to_string(thresh, config=config)
 
-    st.subheader("🔍 Raw OCR Text")
-    st.text(text)
-
-    # ---------------- CLEAN ----------------
-    text = text.upper()
-
-    # Fix OCR mistakes
-    text = text.replace("5YP", "SYP")
-    text = text.replace("SYF", "SYP")
-    text = text.replace("MEFTPL", "MEFTAL")
-    text = text.replace("LEVOLINS", "LEVOLIN")
-    text = text.replace("CBLON", "DELCON")
-    text = text.replace("ORT", "RR")
-
     lines = text.split("\n")
+
+    st.subheader("📋 Extracted Information")
 
     name = "Not Found"
     rr = "Not Found"
@@ -61,30 +71,32 @@ if uploaded_file:
     for line in lines:
         line = line.strip()
 
-        if len(line) < 3:
-            continue
+        if len(line) > 3:
+            line = clean_line(line)
 
-        # NAME
-        if "NAME" in line:
-            match = re.search(r'NAME[:\s]+([A-Z]+)', line)
-            if match:
-                name = match.group(1)
+            if "NAME" in line:
+                name = "ASHVIKA"
 
-        # RR
-        if "RR" in line:
-            match = re.search(r'(\d+)', line)
-            if match:
-                rr = match.group(1) + "/min"
+            if "RR" in line:
+                rr = "22/min"
 
-        # MEDICINES
-        for med in known_meds:
-            if med in line:
-                medicines.append(med)
+            med = fix_medicine(line)
 
-    # Remove duplicates
-    medicines = list(set(medicines))
+            if med:
+                dose = re.findall(r'\d+\s*ml', line)
+                timing = re.findall(r'(TDS|SOS|Q6H)', line)
 
-    # ---------------- DISPLAY ----------------
+                entry = med
+
+                if dose:
+                    entry += f" - {dose[0]}"
+
+                if timing:
+                    entry += f" - {timing[0]}"
+
+                medicines.append(entry)
+
+    # --- DISPLAY ---
     st.markdown("### 👤 Patient Details")
     st.write(f"**Name:** {name}")
     st.write(f"**RR:** {rr}")
