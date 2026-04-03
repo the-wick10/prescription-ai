@@ -49,16 +49,38 @@ if uploaded_file:
 
     st.image(image, caption="🖼 Uploaded Prescription", use_container_width=True)
 
-    # --- PREPROCESS ---
+    # ---------------- PREPROCESS ----------------
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (3, 3), 0)
-    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    thresh = cv2.adaptiveThreshold(
+        blur, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        11, 2
+    )
 
     st.image(thresh, caption="🧪 Processed Image", use_container_width=True)
 
-    # --- OCR ---
-    config = r'--oem 3 --psm 6'
-    text = pytesseract.image_to_string(thresh, config=config)
+    # ---------------- ROI OCR ----------------
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    text = ""
+
+    for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+
+        # filter noise
+        if w > 50 and h > 20:
+            roi = thresh[y:y+h, x:x+w]
+
+            roi_text = pytesseract.image_to_string(
+                roi,
+                config='--oem 3 --psm 7'
+            )
+
+            text += roi_text + "\n"
 
     lines = text.split("\n")
 
@@ -74,12 +96,19 @@ if uploaded_file:
         if len(line) > 3:
             line = clean_line(line)
 
+            # NAME extraction
             if "NAME" in line:
-                name = "ASHVIKA"
+                match = re.search(r'NAME[:\s]+([A-Z]+)', line)
+                if match:
+                    name = match.group(1)
 
+            # RR extraction
             if "RR" in line:
-                rr = "22/min"
+                match = re.search(r'(\d+)', line)
+                if match:
+                    rr = match.group(1) + "/min"
 
+            # MEDICINE detection
             med = fix_medicine(line)
 
             if med:
@@ -96,7 +125,10 @@ if uploaded_file:
 
                 medicines.append(entry)
 
-    # --- DISPLAY ---
+    # remove duplicates
+    medicines = list(set(medicines))
+
+    # ---------------- DISPLAY ----------------
     st.markdown("### 👤 Patient Details")
     st.write(f"**Name:** {name}")
     st.write(f"**RR:** {rr}")
@@ -108,3 +140,7 @@ if uploaded_file:
             st.write(f"• {med}")
     else:
         st.write("No medicines detected")
+
+    # ---------------- RAW TEXT ----------------
+    with st.expander("🔍 Raw OCR Text"):
+        st.text(text)
